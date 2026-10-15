@@ -1,0 +1,27 @@
+# 진행 문서 — Drive에만 두고 GitHub에는 올리지 않는다
+요구사항_*.md
+이해_*
+답변_*
+평가준비_*
+평가문항.md
+CLAUDE.md
+WORKLOG.md
+
+# 과제 첨부 앱 — 재배포하지 않는다 (README에는 "과제 첨부 앱 사용"만 적는다)
+agent-app.zip
+agent-app/
+
+# 시크릿
+.env
+.env.local
+
+# OS · 에디터 부산물
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+
+# 언어별
+__pycache__/
+*.pyc
+node_modules/
