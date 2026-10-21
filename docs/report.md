@@ -114,3 +114,65 @@ agent-test는 `api_keys`·로그 폴더에서 거부되고 `upload_files`에는 
 - **`api_keys`·로그 폴더는 agent-core 전용(770)**: others 권한을 0으로 두면 agent-test(agent-core 아님)가 열 수 없다. 키 파일이 있는 곳이라 최소 권한으로 잡았다.
 - **디렉토리에 setgid(`2`)**: 새 파일이 만든 사람의 개인 그룹이 아니라 폴더의 그룹(agent-core / agent-common)을 물려받는다. 이게 없으면 agent-admin이 만든 키·로그 파일을 agent-dev가 못 읽는다.
 - **`upload_files`에 기본 ACL(`setfacl -d`)**: 새로 생기는 파일에도 agent-common 쓰기 권한이 유지된다. 일반 권한만 쓰면 만든 사람의 umask에 따라 그룹 쓰기가 빠질 수 있다.
+
+## 3. 환경 변수·키 파일·앱 실행
+
+### 3-1. 앱 파일 배치
+
+과제 첨부 앱 중 서버 구조(`uname -m` = `x86_64`)에 맞는 `agent-app-linux-x86`을 `scp -P 20022`로 EC2에 보내 `$AGENT_HOME`에 두고 agent-admin만 실행하게 했다.
+
+```bash
+A=/home/agent-admin/agent-app
+sudo mv ~/agent-app-linux-x86 $A/
+sudo chown agent-admin:agent-admin $A/agent-app-linux-x86
+sudo chmod 750 $A/agent-app-linux-x86
+```
+
+### 3-2. 환경 변수와 키 파일
+
+`agent-admin`(`sudo -iu agent-admin`)의 `~/.bashrc` 끝에 변수 5개를 `export`로 추가하고, 키 파일을 만들었다.
+
+```bash
+cat >> ~/.bashrc <<'EOF'
+export AGENT_HOME=/home/agent-admin/agent-app
+export AGENT_PORT=15034
+export AGENT_UPLOAD_DIR=$AGENT_HOME/upload_files
+export AGENT_KEY_PATH=$AGENT_HOME/api_keys
+export AGENT_LOG_DIR=/var/log/agent-app
+EOF
+source ~/.bashrc
+echo agent_api_key_test > $AGENT_KEY_PATH/t_secret.key
+cp -p $AGENT_KEY_PATH/t_secret.key $AGENT_KEY_PATH/secret.key
+chmod 640 $AGENT_KEY_PATH/t_secret.key $AGENT_KEY_PATH/secret.key
+```
+
+키 파일 내용 `agent_api_key_test`는 명세가 정한 테스트 값이다(실제 키 아님).
+
+![환경 변수와 키 파일](captures/step_3_01_env_key.png)
+
+### 3-3. 앱 실행: Boot Sequence와 포트
+
+일반 계정(agent-admin)으로 백그라운드 실행했다. root로는 실행하지 않았다.
+
+```bash
+cd $AGENT_HOME
+PYTHONUNBUFFERED=1 nohup ./agent-app-linux-x86 > ~/agent-app.out 2>&1 &
+cat ~/agent-app.out
+ss -ltnp | grep 15034
+ps -o pid,ppid,cmd -p "$(pgrep -d, -f agent-app-linux)"
+```
+
+Boot Sequence 5단계가 모두 `[OK]`이고 마지막에 `Agent READY`가 출력됐다.
+
+![Boot Sequence](captures/step_3_02_boot_ready.png)
+
+앱이 `0.0.0.0:15034`에서 LISTEN 중이다(PID 50864). 같은 이름의 프로세스가 둘 보이는데, 50862가 부모, 50864가 자식이고 포트를 연 쪽은 자식이다.
+
+![LISTEN](captures/step_3_03_listen.png)
+
+### 3-4. 설계 선택 (왜)
+
+- **명세와 제공 앱이 어긋난 곳을 앱에 맞췄다**: 명세는 `AGENT_KEY_PATH`를 `…/api_keys/t_secret.key`(파일)로 적었지만, 앱은 폴더(`…/api_keys`)를 기대해 `[2/5]`에서 `Key Path Mismatch`로 실패했다. 또 앱은 그 폴더 안의 `secret.key`를 찾아 `[3/5]`에서 `Missing File`로 실패했다. 변수를 폴더 경로로 바꾸고, 명세 이름의 `t_secret.key`는 두고 같은 내용의 `secret.key`를 복사해 둘 다 만족시켰다.
+- **환경 변수는 `agent-admin`의 `~/.bashrc`에**: 앱을 터미널에서 켜므로 거기서 읽힌다. cron은 이 파일을 읽지 않아서 `monitor.sh`는 안쪽 기본값으로 따로 처리한다.
+- **`nohup … &`로 백그라운드 실행**: 터미널을 닫아도 앱이 유지되어 cron 점검 동안 계속 돈다. `PYTHONUNBUFFERED=1`은 출력이 파일에 바로 쓰이게 한다.
+- **프로세스 찾기**: PyInstaller 앱이라 같은 이름 프로세스가 둘(부모·자식) 뜬다. `monitor.sh`는 `pgrep -f agent-app-linux`로 찾는다.
