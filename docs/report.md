@@ -383,3 +383,71 @@ sudo install -o agent-dev -g agent-core -m 750 /tmp/report.sh /home/agent-admin/
 - **로그 경로는 `MONITOR_LOG`로 바꿀 수 있음**: 기본값은 `/var/log/agent-app/monitor.log`로 `monitor.sh`와 같다.
 - **로그가 없거나 샘플이 0개면 exit 1**: 읽을 수 없으면 `[ERROR]`, 줄은 있으나 정상 기록이 없으면 `[WARNING]`을 내고 끝난다.
 - **한계**: 현재 `monitor.log`만 읽고 회전된 `monitor.log.1~.9`는 읽지 않는다. 시작/종료 시간을 입력받아 구간만 분석하는 선택 기능은 넣지 않았다(원문이 "선택").
+
+## 8. (보너스 2) 시간 기반 로그 보존 정책
+
+`bin/log_retention.sh`가 `/var/log/agent-app`의 7일 이상 지난 로그를 압축해 `/var/log/monitor/agent-app/archive/`로 옮기고, 아카이브의 30일 이상 지난 `.gz`를 지운다. cron에는 등록하지 않았고 필요할 때 `agent-admin`이 직접 실행한다.
+
+### 8-1. 설치와 아카이브 폴더
+
+`/var/log`는 root 소유라 `agent-admin`이 아카이브 폴더를 만들 수 없어서, 폴더 생성과 소유자 지정은 서버의 `ubuntu` 계정이 `sudo`로 한다. 스크립트는 `report.sh`와 같은 방식(`scp` 후 `install`)으로 올렸다.
+
+```bash
+# 로컬 PowerShell
+scp -P 20022 -i "<키 경로>.pem" bin/log_retention.sh ubuntu@<EC2 IP>:/tmp/log_retention.sh
+
+# 서버(ubuntu)
+sudo install -o agent-dev -g agent-core -m 750 /tmp/log_retention.sh /home/agent-admin/agent-app/bin/log_retention.sh
+sudo mkdir -p /var/log/monitor/agent-app/archive
+sudo chown -R agent-admin:agent-core /var/log/monitor
+sudo chmod -R 2770 /var/log/monitor
+```
+
+`log_retention.sh`는 `agent-dev:agent-core`, 750이다.
+
+![log_retention.sh 소유자·권한](captures/step_9_04_perm.png)
+
+### 8-2. 동작 확인
+
+7일·30일을 기다릴 수 없어 `touch -d`로 수정 시각을 거짓으로 만든 테스트 파일을 썼다. `agent-admin`으로 8일 전 `test_old.log`와 40일 전 `test_ancient.gz`를 만들었다.
+
+```bash
+touch -d "8 days ago" /var/log/agent-app/test_old.log
+echo dummy | gzip > /var/log/monitor/agent-app/archive/test_ancient.gz
+touch -d "40 days ago" /var/log/monitor/agent-app/archive/test_ancient.gz
+```
+
+![실행 전: test_old.log, test_ancient.gz](captures/step_9_01_before.png)
+
+실행하면 `test_old.log`는 압축돼 아카이브로 옮겨지고, `test_ancient.gz`는 삭제된다. 같은 폴더의 `agent_app.log`·`monitor.log`는 최근 수정이라 그대로 남는다.
+
+```bash
+/home/agent-admin/agent-app/bin/log_retention.sh; echo "exit=$?"
+```
+
+![실행 결과: 1 compressed, 1 deleted](captures/step_9_02_run.png)
+
+아카이브된 `test_old.log-20261023-142142.gz`의 수정 시각이 실행한 날이 아니라 원본의 `2026-10-15`로 남은 것이 보인다(gzip이 원본 시각을 물려준다).
+
+### 8-3. 예외 처리
+
+| 상황 | 출력 | 종료 코드 |
+|---|---|---|
+| 대상 파일 0개 | `[INFO] nothing to do (...)`, `0 compressed, 0 deleted` | 0 |
+| 로그 폴더 없음 (`LOG_DIR=/var/log/nonexistent`) | `[ERROR] log dir not found` | 1 |
+| 아카이브 폴더를 못 만들거나 쓸 수 없음 (`ARCHIVE_DIR=/root/x`, 권한 부족) | `[ERROR] archive dir missing or not writable` | 1 |
+| 파일 하나의 압축·삭제 실패 | `[WARNING] failed to ...` 후 나머지 계속 | 0 |
+
+![예외 3가지](captures/step_9_03_exceptions.png)
+
+앞의 두 `[ERROR]`는 아무것도 건드리지 않고 끝난다. 마지막 줄(파일 하나 실패)은 일부러 실패를 만들어 보지 않아 캡처가 없다.
+
+### 8-4. 설계 선택 (왜)
+
+- **시간 기준은 `find -mmin`**: `-mtime`은 일 단위로 잘라 세서 "정확히 7일"이 애매하다. 7일=10080분, 30일=43200분으로 적었다.
+- **대상은 `*.log`와 `*.log.[0-9]`**: 명세는 `*.log`만 적었지만, `monitor.sh`가 회전한 `monitor.log.1~.9`(그리고 앱의 `agent_app.log.1~.3`)는 이름이 `.log`로 끝나지 않아 오래돼도 영영 안 잡힌다. 그래서 회전 파일까지 넓혔다.
+- **아카이브 이름에 시각을 붙임**: 같은 이름(`monitor.log.1`)이 다음 주에 또 아카이브되면 덮어써 지므로 `<원래이름>-<날짜-시각>.gz`로 저장한다.
+- **30일은 원본 수정 시각 기준**: 압축·`mv`해도 수정 시각이 유지돼 "아카이브된 지 30일"이 아니라 "마지막 기록 후 30일"이 된다. 7일 압축 뒤 약 23일 더 보관한다.
+- **아카이브 폴더가 없으면 `mkdir -p`부터 시도**: 만들 수 있으면 폴더 없음은 오류가 아니다. 못 만들거나 쓰기 권한이 없으면 그때 `[ERROR]`로 끝낸다.
+- **`LOG_DIR`·`ARCHIVE_DIR`로 경로를 바꿀 수 있음**: `monitor.sh`의 `MONITOR_LOG`와 같은 방식이다. 기본값은 명세 경로다.
+- **한계**: cron 자동 실행은 넣지 않았다. 활성 `monitor.log`가 7일 넘게 안 바뀐 경우(앱·cron이 7일 멈춘 경우)에는 그 파일도 압축된다.

@@ -2,7 +2,7 @@
 
 AWS EC2(Ubuntu 22.04)에 보안·계정·권한을 설정하고, 과제 첨부 앱(`agent-app`)의 프로세스·포트·CPU/MEM/DISK를 매분 점검해 `monitor.log`에 남기는 Bash 스크립트 `monitor.sh`를 만든 기록입니다. 스크립트와 **수행내역서**가 결과물입니다. (첨부 앱은 재배포하지 않아 repo에 없습니다.)
 
-- 스크립트: [bin/monitor.sh](bin/monitor.sh), 보너스 [bin/report.sh](bin/report.sh)
+- 스크립트: [bin/monitor.sh](bin/monitor.sh), 보너스 [bin/report.sh](bin/report.sh) · [bin/log_retention.sh](bin/log_retention.sh)
 - 수행내역서: [docs/report.md](docs/report.md) — 설정 명령, 증거 캡처, 설계 이유가 절마다 들어 있습니다.
 - 증거 캡처: [docs/captures/](docs/captures/)
 
@@ -37,6 +37,14 @@ sudo tail -n 5 /var/log/agent-app/monitor.log
 /home/agent-admin/agent-app/bin/report.sh
 ```
 
+### 시간 기반 로그 보존 (보너스 2)
+
+`log_retention.sh`는 `/var/log/agent-app`의 7일 이상 지난 로그(`*.log`, 회전 파일 `*.log.N`)를 압축해 `/var/log/monitor/agent-app/archive/`로 옮기고, 아카이브의 30일 이상 지난 `.gz`를 삭제합니다. 대상이 0개면 안내 후 exit 0, 로그 폴더가 없거나 아카이브 폴더를 쓸 수 없으면 `[ERROR]`와 exit 1입니다. cron에는 등록하지 않았고 `agent-admin`이 직접 실행합니다.
+
+```bash
+/home/agent-admin/agent-app/bin/log_retention.sh
+```
+
 ## 설정 항목
 
 | 구분 | 설정 | 값 |
@@ -56,6 +64,8 @@ sudo tail -n 5 /var/log/agent-app/monitor.log
 | `/var/log/agent-app` | agent-admin:agent-core | 2770 | `monitor.log` |
 | `$AGENT_HOME/bin/monitor.sh` | agent-dev:agent-core | 750 | 점검 스크립트 |
 | `$AGENT_HOME/bin/report.sh` | agent-dev:agent-core | 750 | 요약 리포트(보너스 1) |
+| `$AGENT_HOME/bin/log_retention.sh` | agent-dev:agent-core | 750 | 로그 보존(보너스 2) |
+| `/var/log/monitor/agent-app/archive` | agent-admin:agent-core | 2770 | 압축된 로그 보관 |
 
 환경 변수(`agent-admin`의 `~/.bashrc`): `AGENT_HOME` `AGENT_PORT` `AGENT_UPLOAD_DIR` `AGENT_KEY_PATH` `AGENT_LOG_DIR`. 키 파일 내용은 명세가 정한 테스트 값이라 repo에 넣지 않았습니다.
 
@@ -80,5 +90,7 @@ sudo tail -n 5 /var/log/agent-app/monitor.log
 | 로그·회전 | `tail`, 10MB 테스트 파일 12회 실행 | 한 줄 누적, 10개 유지 | `step_5_01`~`03` |
 | cron | 등록 후 손대지 않고 대기 | 1분 간격으로 로그 증가 | `step_6_01` `step_6_02` |
 | `report.sh` | `agent-admin`으로 실행 | CPU·MEM·DISK 평균/최대/최소, 38 samples | `step_8_01` |
+| `log_retention.sh` | `touch -d`로 8일·40일 전 테스트 파일 만들고 실행 | 1 compressed, 1 deleted, 원본 수정 시각 유지 | `step_9_01` `step_9_02` |
+| 보존 예외 처리 | 대상 0개 / 로그 폴더 없음 / 아카이브 쓰기 불가 | exit 0 / 1 / 1 | `step_9_03` `step_9_04`(권한) |
 
 모든 확인 결과는 위 캡처와 수행내역서에 있습니다.
