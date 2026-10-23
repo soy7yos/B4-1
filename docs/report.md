@@ -343,3 +343,43 @@ sudo wc -l /var/log/agent-app/monitor.log
 - **스크립트 전체 경로 사용**: cron은 `PATH`가 `/usr/bin:/bin` 정도로 비어 있고 작업 폴더도 홈이라, 상대 경로나 `monitor.sh`만 쓰면 못 찾는다.
 - **출력은 `/dev/null`로 버림**: 안 버리면 cron이 출력을 메일로 보내려 한다. 점검 결과는 `monitor.sh`가 `monitor.log`에 직접 남기므로 따로 `>>`를 붙이지 않았다. 대신 cron 실행 자체가 실패하면 화면에 흔적이 없고 `monitor.log`에 줄이 안 느는 것으로만 드러난다.
 - **crontab에 환경 변수를 넣지 않음**: `monitor.sh` 안에 `AGENT_PORT`·`MONITOR_LOG` 기본값이 있어 cron의 빈 환경에서도 같은 값으로 돈다(§4-4).
+
+## 7. (보너스 1) report.sh 요약 리포트
+
+### 7-1. 설치
+
+`monitor.sh`와 같은 방식으로 올렸다. 로컬 Windows PowerShell에서 `scp`로 `/tmp`에 올린 뒤, 서버의 `ubuntu` 계정에서 `install`로 `$AGENT_HOME/bin/`에 소유자·그룹·권한을 정해 복사한다.
+
+```bash
+# 로컬 PowerShell
+scp -P 20022 -i "<키 경로>.pem" bin/report.sh ubuntu@<EC2 IP>:/tmp/report.sh
+
+# 서버(ubuntu)
+sudo install -o agent-dev -g agent-core -m 750 /tmp/report.sh /home/agent-admin/agent-app/bin/report.sh
+```
+
+### 7-2. 실행 결과
+
+`agent-admin`으로 실행하면 `monitor.log`의 정상 기록 줄을 읽어 CPU·MEM·DISK의 평균·최대·최소와 샘플 수를 출력한다.
+
+```bash
+/home/agent-admin/agent-app/bin/report.sh
+```
+
+| 항목 | 평균 | 최대 | 최소 |
+|---|---|---|---|
+| CPU | 24.0% | 35.1% (13:42:03) | 0.5% (13:56:03) |
+| Memory | 69.3% | 70.5% (13:17:47) | 68.9% (14:00:02) |
+| Disk | 37.0% | 37.0% | 37.0% |
+
+샘플 수는 `Data Points: 38 samples`다. 최대·최소 옆 시각은 그 값이 찍힌 로그 줄의 시각이다.
+
+![report.sh 통계 출력](captures/step_8_01_report_output.png)
+
+### 7-3. 설계 선택 (왜)
+
+- **정상 기록 줄만 집계**: Health Check가 실패한 줄(`HEALTH_CHECK_FAILED ...`)에는 수치가 없다. 4번째 칸이 `CPU:`로 시작하는 줄만 읽어 평균이 깨지지 않게 했다.
+- **계산은 `awk`**: `35.1` 같은 소수를 그대로 더하고 비교한다. Bash `[ ]`는 정수만 다룬다(§4-4와 같은 이유).
+- **로그 경로는 `MONITOR_LOG`로 바꿀 수 있음**: 기본값은 `/var/log/agent-app/monitor.log`로 `monitor.sh`와 같다.
+- **로그가 없거나 샘플이 0개면 exit 1**: 읽을 수 없으면 `[ERROR]`, 줄은 있으나 정상 기록이 없으면 `[WARNING]`을 내고 끝난다.
+- **한계**: 현재 `monitor.log`만 읽고 회전된 `monitor.log.1~.9`는 읽지 않는다. 시작/종료 시간을 입력받아 구간만 분석하는 선택 기능은 넣지 않았다(원문이 "선택").

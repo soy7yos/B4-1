@@ -2,7 +2,7 @@
 
 AWS EC2(Ubuntu 22.04)에 보안·계정·권한을 설정하고, 과제 첨부 앱(`agent-app`)의 프로세스·포트·CPU/MEM/DISK를 매분 점검해 `monitor.log`에 남기는 Bash 스크립트 `monitor.sh`를 만든 기록입니다. 스크립트와 **수행내역서**가 결과물입니다. (첨부 앱은 재배포하지 않아 repo에 없습니다.)
 
-- 스크립트: [bin/monitor.sh](bin/monitor.sh)
+- 스크립트: [bin/monitor.sh](bin/monitor.sh), 보너스 [bin/report.sh](bin/report.sh)
 - 수행내역서: [docs/report.md](docs/report.md) — 설정 명령, 증거 캡처, 설계 이유가 절마다 들어 있습니다.
 - 증거 캡처: [docs/captures/](docs/captures/)
 
@@ -29,6 +29,14 @@ sudo tail -n 5 /var/log/agent-app/monitor.log
 * * * * * /home/agent-admin/agent-app/bin/monitor.sh >/dev/null 2>&1
 ```
 
+### 요약 리포트 (보너스 1)
+
+`report.sh`는 `monitor.log`의 정상 기록 줄에서 CPU·MEM·DISK의 평균·최대·최소(발생 시각 포함)와 샘플 수를 콘솔로 출력합니다. 로그가 없거나 샘플이 0개면 메시지를 내고 exit 1입니다. 현재 `monitor.log`만 읽고, 시작/종료 시간 구간 지정은 구현하지 않았습니다.
+
+```bash
+/home/agent-admin/agent-app/bin/report.sh
+```
+
 ## 설정 항목
 
 | 구분 | 설정 | 값 |
@@ -47,6 +55,7 @@ sudo tail -n 5 /var/log/agent-app/monitor.log
 | `$AGENT_HOME/api_keys` | agent-admin:agent-core | 2770 | 키 파일 (보안 폴더) |
 | `/var/log/agent-app` | agent-admin:agent-core | 2770 | `monitor.log` |
 | `$AGENT_HOME/bin/monitor.sh` | agent-dev:agent-core | 750 | 점검 스크립트 |
+| `$AGENT_HOME/bin/report.sh` | agent-dev:agent-core | 750 | 요약 리포트(보너스 1) |
 
 환경 변수(`agent-admin`의 `~/.bashrc`): `AGENT_HOME` `AGENT_PORT` `AGENT_UPLOAD_DIR` `AGENT_KEY_PATH` `AGENT_LOG_DIR`. 키 파일 내용은 명세가 정한 테스트 값이라 repo에 넣지 않았습니다.
 
@@ -70,5 +79,6 @@ sudo tail -n 5 /var/log/agent-app/monitor.log
 | `monitor.sh` | 정상 / 앱 종료 / UFW 끔 실행 후 `echo $?` | 0 / 1 / 0(경고) | `step_4_01`~`03` |
 | 로그·회전 | `tail`, 10MB 테스트 파일 12회 실행 | 한 줄 누적, 10개 유지 | `step_5_01`~`03` |
 | cron | 등록 후 손대지 않고 대기 | 1분 간격으로 로그 증가 | `step_6_01` `step_6_02` |
+| `report.sh` | `agent-admin`으로 실행 | CPU·MEM·DISK 평균/최대/최소, 38 samples | `step_8_01` |
 
 모든 확인 결과는 위 캡처와 수행내역서에 있습니다.
