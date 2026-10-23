@@ -286,3 +286,47 @@ sudo rm -f /tmp/rot_test.log*
 - **실패해도 한 줄을 남긴다**: 앱이 죽은 시각이 로그에 남아야 장애 시점을 추적할 수 있다. 통계를 낼 때는 `CPU:`가 있는 줄만 읽으면 된다.
 - **`umask 007`**: 로그를 처음 만드는 계정이 agent-admin(cron)이든 agent-dev(수동 실행)든 같은 그룹(agent-core)이 이어 쓸 수 있게 660으로 만든다.
 - **`MONITOR_LOG` 환경 변수로 경로 덮어쓰기**: 회전 테스트가 실제 `/var/log/agent-app/monitor.log`를 건드리지 않게 하려는 용도다. cron에는 이 변수가 없어 기본 경로를 쓴다.
+
+## 6. cron 매분 실행
+
+### 6-1. agent-admin crontab 등록
+
+`agent-admin`의 crontab에 `monitor.sh`를 매분 실행하도록 등록했다. 로그인 계정 `ubuntu`에서 `sudo -u agent-admin`으로 `crontab -`에 한 줄을 넘겼다.
+
+```bash
+sudo -u agent-admin crontab - <<'EOF'
+# 전체 경로 필수(cron PATH가 빈약). 출력은 버린다: 기록은 monitor.sh가 monitor.log에 직접 남긴다
+* * * * * /home/agent-admin/agent-app/bin/monitor.sh >/dev/null 2>&1
+EOF
+sudo -u agent-admin crontab -l
+```
+
+`crontab -l`에 `* * * * * /home/agent-admin/agent-app/bin/monitor.sh >/dev/null 2>&1`가 나온다. 앞의 다섯 칸은 분·시·일·월·요일이고 전부 `*`라 매분 실행이다.
+
+![crontab 등록 확인](captures/step_6_01_crontab_list.png)
+
+### 6-2. 자동 실행 확인 (1분 후 로그 증가)
+
+등록 뒤 사람이 `monitor.sh`를 실행하지 않고 기다린 다음 로그를 봤다.
+
+```bash
+date
+sudo tail -n 5 /var/log/agent-app/monitor.log
+sudo wc -l /var/log/agent-app/monitor.log
+```
+
+`date`는 `13:33:34`이고, 로그 4줄 중 앞 두 줄(`13:17:47`, `13:18:50`)은 5단계 때 직접 실행한 기록이다. 그 뒤에 `13:32:02`와 `13:33:02` 줄이 정확히 1분 간격으로 추가됐다. 초가 `:02`로 같은 것은 cron이 매분 0초에 시작하고, `monitor.sh`가 CPU 측정에 1초 쉰 뒤 기록하기 때문이다.
+
+```
+[2026-10-23 13:32:02] PID:53111 CPU:17.4% MEM:70.1% DISK_USED:37%
+[2026-10-23 13:33:02] PID:53111 CPU:21.0% MEM:70.2% DISK_USED:37%
+```
+
+![cron으로 로그가 매분 늘어남](captures/step_6_02_cron_log_growth.png)
+
+### 6-3. 설계 선택 (왜)
+
+- **등록 계정은 `agent-admin`**: 명세가 cron 실행자로 지정했다. `monitor.sh`(`agent-dev:agent-core`, 750)를 실행하려면 `agent-core` 소속이어야 하는데 `agent-admin`이 그렇다.
+- **스크립트 전체 경로 사용**: cron은 `PATH`가 `/usr/bin:/bin` 정도로 비어 있고 작업 폴더도 홈이라, 상대 경로나 `monitor.sh`만 쓰면 못 찾는다.
+- **출력은 `/dev/null`로 버림**: 안 버리면 cron이 출력을 메일로 보내려 한다. 점검 결과는 `monitor.sh`가 `monitor.log`에 직접 남기므로 따로 `>>`를 붙이지 않았다. 대신 cron 실행 자체가 실패하면 화면에 흔적이 없고 `monitor.log`에 줄이 안 느는 것으로만 드러난다.
+- **crontab에 환경 변수를 넣지 않음**: `monitor.sh` 안에 `AGENT_PORT`·`MONITOR_LOG` 기본값이 있어 cron의 빈 환경에서도 같은 값으로 돈다(§4-4).
