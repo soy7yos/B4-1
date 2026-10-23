@@ -176,3 +176,113 @@ Boot Sequence 5단계가 모두 `[OK]`이고 마지막에 `Agent READY`가 출�
 - **환경 변수는 `agent-admin`의 `~/.bashrc`에**: 앱을 터미널에서 켜므로 거기서 읽힌다. cron은 이 파일을 읽지 않아서 `monitor.sh`는 안쪽 기본값으로 따로 처리한다.
 - **`nohup … &`로 백그라운드 실행**: 터미널을 닫아도 앱이 유지되어 cron 점검 동안 계속 돈다. `PYTHONUNBUFFERED=1`은 출력이 파일에 바로 쓰이게 한다.
 - **프로세스 찾기**: PyInstaller 앱이라 같은 이름 프로세스가 둘(부모·자식) 뜬다. `monitor.sh`는 `pgrep -f agent-app-linux`로 찾는다.
+
+## 4. monitor.sh 점검 스크립트
+
+로그 기록·회전은 §5에서 다루고, 여기서는 Health Check·방화벽 경고·자원 수집·임계값 경고와 파일 권한을 다룬다. 스크립트는 Bash로만 작성했다.
+
+### 4-1. 위치와 권한
+
+`bin/monitor.sh`를 `scp -P 20022`로 EC2의 `/tmp`에 올린 뒤, `install`로 `$AGENT_HOME/bin/`에 소유자·권한을 지정해 배치했다. `bin` 폴더는 `agent-admin:agent-core` 750이다.
+
+```bash
+sudo install -o agent-dev -g agent-core -m 750 /tmp/monitor.sh /home/agent-admin/agent-app/bin/monitor.sh
+sudo ls -l $A/bin/monitor.sh
+```
+
+`-rwxr-x--- agent-dev agent-core`로 소유자 agent-dev, 그룹 agent-core, 750이다. cron 실행 계정 agent-admin은 agent-core 소속이라 실행할 수 있고, agent-core가 아닌 agent-test는 `Permission denied`로 막힌다.
+
+![정상 실행과 권한 확인](captures/step_4_01_ok_run.png)
+
+### 4-2. Health Check (실패 시 exit 1)
+
+프로세스와 포트를 차례로 확인하고, 하나라도 비정상이면 `exit 1`로 종료한다.
+
+```bash
+PID=$(pgrep -fn "$APP")           # APP=agent-app-linux
+[ -z "$PID" ] && { echo "... [ERROR] not running"; exit 1; }
+ss -ltn "sport = :$PORT" | grep -q LISTEN || { echo "... [ERROR] not listening"; exit 1; }
+```
+
+앱이 켜져 있으면 `[OK] (PID: …)`와 `Checking port 15034... [OK]`가 나오고 종료 코드는 0이다. 앱을 `Ctrl+C`(`kill -INT`)로 끈 뒤 실행하면 `not running`이 출력되고 `exit=1`이다.
+
+![앱 종료 후 exit 1](captures/step_4_02_app_down_exit1.png)
+
+### 4-3. 방화벽 경고·자원 수집·임계값 경고
+
+UFW가 꺼져 있으면 `[WARNING]`만 출력하고 계속 진행한다. 자원은 CPU(`/proc/stat`을 1초 간격으로 두 번 읽음), MEM(`free`의 total과 available), DISK(`df /`의 Used %)를 모으고, CPU 20%·MEM 10%·DISK 80%를 넘으면 `[WARNING]`만 출력한다. 경고가 떠도 종료 코드는 0이다.
+
+```bash
+grep -q '^ENABLED=yes' /etc/ufw/ufw.conf || echo "[WARNING] Firewall (ufw) is not enabled"
+over "$MEM" 10 && echo "[WARNING] MEM threshold exceeded (${MEM}% > 10%)"
+```
+
+`ufw disable`로 방화벽을 끈 상태에서 실행하면 `[WARNING] Firewall (ufw) is not enabled`가 출력되고 `exit=0`이다. 확인 뒤 `sudo ufw --force enable`로 다시 켜서 20022·15034만 허용된 상태로 되돌렸다.
+
+![방화벽 꺼짐 경고](captures/step_4_03_ufw_warn.png)
+
+MEM은 이 서버에서 50~70%로 측정되어 임계값 10%를 계속 넘기므로 정상 실행에도 MEM 경고가 뜬다. 명세 임계값을 그대로 적용한 결과다.
+
+### 4-4. 설계 선택 (왜)
+
+- **프로세스 찾기는 `pgrep -fn`**: PyInstaller 앱은 같은 이름의 프로세스가 둘(부모·자식) 뜬다. `-n`으로 가장 늦게 뜬 자식, 즉 실제 포트를 연 쪽의 PID를 쓴다.
+- **방화벽은 `/etc/ufw/ufw.conf`의 `ENABLED=yes`로 판단**: `ufw status`는 sudo가 필요한데 cron(agent-admin)에는 sudo가 없다. 설정 파일 값이라 실제 적용 상태와 어긋날 수 있지만 sudo 없이 읽을 수 있다.
+- **임계값 비교는 `awk`**: Bash의 `[ ]`는 정수만 비교해서 `20.9` 같은 소수를 못 다룬다.
+- **환경 변수에 기본값**: cron은 `~/.bashrc`를 읽지 않으므로 `PORT="${AGENT_PORT:-15034}"`처럼 스크립트 안에 기본값을 둔다. `sudo -u agent-admin`으로 돌려 cron과 같은 빈 환경에서 확인했다.
+- **끝에 `exit 0`을 명시**: 마지막 `&&` 줄의 조건이 거짓이면 종료 코드가 1이 된다. 경고는 종료 사유가 아니므로 정상 종료를 명시했다.
+
+## 5. 로그 기록·용량 관리
+
+### 5-1. monitor.log 누적 기록
+
+`monitor.sh`가 점검을 마칠 때마다 `/var/log/agent-app/monitor.log`에 한 줄을 `>>`로 이어 붙인다. 포맷은 `[YYYY-MM-DD HH:MM:SS] PID:<앱 PID> CPU:..% MEM:..% DISK_USED:..%`이고, CPU·MEM은 시스템 전체 사용률이다. 새로 추가한 코드는 `log()`·`rotate_log()` 함수와 호출 세 곳이다.
+
+```bash
+# 설치(로컬에서 scp로 /tmp에 올린 뒤)
+sudo install -o agent-dev -g agent-core -m 750 /tmp/monitor.sh /home/agent-admin/agent-app/bin/monitor.sh
+
+# 정상 실행 후 로그 확인
+sudo -u agent-admin /home/agent-admin/agent-app/bin/monitor.sh
+sudo tail -n 3 /var/log/agent-app/monitor.log
+sudo ls -l /var/log/agent-app/monitor.log
+```
+
+실행 끝에 `[INFO] Log appended: /var/log/agent-app/monitor.log`가 출력되고, 로그에 `PID:53111 CPU:14.1% MEM:70.5% DISK_USED:37%` 줄이 생겼다. 파일은 `agent-admin:agent-core`, 권한 `rw-rw----`(660)이다.
+
+![로그 한 줄 누적](captures/step_5_01_log_append.png)
+
+Health Check가 실패하면 종료(`exit 1`)하기 전에 실패 사유를 한 줄 남긴다. 앱은 켜 둔 채 `AGENT_PORT=1`로 포트 검사를 일부러 실패시켜 확인했다.
+
+```bash
+sudo -u agent-admin env AGENT_PORT=1 /home/agent-admin/agent-app/bin/monitor.sh; echo "exit=$?"
+sudo tail -n 2 /var/log/agent-app/monitor.log
+```
+
+`exit=1`이 나오고 로그에 `[2026-10-23 13:18:50] HEALTH_CHECK_FAILED port`가 남았다.
+
+![실패 시 로그](captures/step_5_02_fail_logged.png)
+
+### 5-2. 10MB / 10개 회전
+
+`monitor.log`가 10MB(10485760바이트) 이상이면 쓰기 직전에 회전한다. 가장 오래된 `.9`를 지우고 `.8→.9 … .1→.2`로 밀고 `monitor.log→monitor.log.1`로 옮긴다. 그래서 파일은 `monitor.log`와 `.1`~`.9`까지 최대 10개다.
+
+실제 로그를 10MB로 채우는 대신 `MONITOR_LOG`로 경로를 `/tmp/rot_test.log`로 바꾸고, `truncate -s 10M`으로 10MB 파일을 만든 뒤 12번 실행했다(10개 제한을 넘기는 횟수).
+
+```bash
+sudo -u agent-admin bash -c 'export MONITOR_LOG=/tmp/rot_test.log; for i in $(seq 12); do truncate -s 10M "$MONITOR_LOG"; /home/agent-admin/agent-app/bin/monitor.sh >/dev/null; done'
+ls -l /tmp/rot_test.log*
+sudo rm -f /tmp/rot_test.log*
+```
+
+결과는 `rot_test.log`(66바이트)와 `.1`~`.9`(각 10485760바이트) 10개이고 `.10`은 없다. 확인 뒤 테스트 파일은 지웠다.
+
+![회전 결과 10개](captures/step_5_03_rotate_10files.png)
+
+### 5-3. 설계 선택 (왜)
+
+- **logrotate 대신 스크립트 안에서 회전**: 명세가 방법을 자유로 두었다. 매분 실행이 곧 점검이라 10MB를 넘는 즉시 회전되고, 별도 설정 파일을 서버에 따로 두지 않아도 된다. 대신 코드 10여 줄이 늘었다.
+- **"최대 10개"는 현재 파일을 포함한 10개로 읽었다**: 명세에 풀이가 없어 `monitor.log` + `.1`~`.9`로 정했다.
+- **쓰기 직전에 회전을 검사하는 `log()` 하나로 통일**: 정상 종료와 Health Check 실패 종료 어디서 불러도 같은 방식으로 회전된다.
+- **실패해도 한 줄을 남긴다**: 앱이 죽은 시각이 로그에 남아야 장애 시점을 추적할 수 있다. 통계를 낼 때는 `CPU:`가 있는 줄만 읽으면 된다.
+- **`umask 007`**: 로그를 처음 만드는 계정이 agent-admin(cron)이든 agent-dev(수동 실행)든 같은 그룹(agent-core)이 이어 쓸 수 있게 660으로 만든다.
+- **`MONITOR_LOG` 환경 변수로 경로 덮어쓰기**: 회전 테스트가 실제 `/var/log/agent-app/monitor.log`를 건드리지 않게 하려는 용도다. cron에는 이 변수가 없어 기본 경로를 쓴다.
