@@ -67,7 +67,7 @@ sudo tail -n 5 /var/log/agent-app/monitor.log
 | `$AGENT_HOME/bin/log_retention.sh` | agent-dev:agent-core | 750 | 로그 보존(보너스 2) |
 | `/var/log/monitor/agent-app/archive` | agent-admin:agent-core | 2770 | 압축된 로그 보관 |
 
-환경 변수(`agent-admin`의 `~/.bashrc`): `AGENT_HOME` `AGENT_PORT` `AGENT_UPLOAD_DIR` `AGENT_KEY_PATH` `AGENT_LOG_DIR`. 키 파일 내용은 명세가 정한 테스트 값이라 repo에 넣지 않았습니다.
+환경 변수(`agent-admin`의 `~/.bashrc`): `AGENT_HOME` `AGENT_PORT` `AGENT_UPLOAD_DIR` `AGENT_KEY_PATH` `AGENT_LOG_DIR`. 키 파일(`t_secret.key`)은 repo에 넣지 않았고, 내용 `agent_api_key_test`는 명세가 정한 테스트 값입니다.
 
 ## 설계 선택
 

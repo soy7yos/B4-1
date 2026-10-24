@@ -11,6 +11,9 @@ WORKLOG.md
 agent-app.zip
 agent-app/
 
+# 콘솔 캡처에 EC2 공인 IP가 보여 Drive에만 둔다
+docs/captures/step_0_01_ec2_running.png
+
 # 시크릿
 .env
 .env.local

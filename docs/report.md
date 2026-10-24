@@ -13,6 +13,10 @@
 | 7 | `monitor.log` 누적 기록(최근 라인) | [§5-1](#5-1-monitorlog-누적-기록) · [§6-2](#6-2-자동-실행-확인-1분-후-로그-증가) | `step_5_01` `step_5_02` `step_6_02` |
 | 8 | crontab 매분 등록 · 자동 실행(1분 후 로그 증가) | [§6](#6-cron-매분-실행) | `step_6_01` `step_6_02` |
 
+서버 환경은 `lsb_release -a`와 `uname -m`으로 확인했다(Ubuntu 22.04.5 LTS, x86_64).
+
+![서버 환경 확인](captures/step_0_02_ssh_lsb_release.png)
+
 ## 1. 문단속 (SSH 포트·Root 차단·방화벽)
 
 ### 1-1. SSH 포트 20022 + Root 원격 로그인 차단
@@ -188,7 +192,7 @@ Boot Sequence 5단계가 모두 `[OK]`이고 마지막에 `Agent READY`가 출�
 - **명세와 제공 앱이 어긋난 곳을 앱에 맞췄다**: 명세는 `AGENT_KEY_PATH`를 `…/api_keys/t_secret.key`(파일)로 적었지만, 앱은 폴더(`…/api_keys`)를 기대해 `[2/5]`에서 `Key Path Mismatch`로 실패했다. 또 앱은 그 폴더 안의 `secret.key`를 찾아 `[3/5]`에서 `Missing File`로 실패했다. 변수를 폴더 경로로 바꾸고, 명세 이름의 `t_secret.key`는 두고 같은 내용의 `secret.key`를 복사해 둘 다 만족시켰다.
 - **환경 변수는 `agent-admin`의 `~/.bashrc`에**: 앱을 터미널에서 켜므로 거기서 읽힌다. cron은 이 파일을 읽지 않아서 `monitor.sh`는 안쪽 기본값으로 따로 처리한다.
 - **`nohup … &`로 백그라운드 실행**: 터미널을 닫아도 앱이 유지되어 cron 점검 동안 계속 돈다. `PYTHONUNBUFFERED=1`은 출력이 파일에 바로 쓰이게 한다.
-- **프로세스 찾기**: PyInstaller 앱이라 같은 이름 프로세스가 둘(부모·자식) 뜬다. `monitor.sh`는 `pgrep -f agent-app-linux`로 찾는다.
+- **프로세스 찾기**: PyInstaller 앱이라 같은 이름 프로세스가 둘(부모·자식) 뜬다. `monitor.sh`는 `pgrep -fn`으로 가장 늦게 뜬 쪽(자식)을 고른다(§4-4).
 
 ## 4. monitor.sh 점검 스크립트
 
@@ -328,7 +332,7 @@ sudo tail -n 5 /var/log/agent-app/monitor.log
 sudo wc -l /var/log/agent-app/monitor.log
 ```
 
-`date`는 `13:33:34`이고, 로그 4줄 중 앞 두 줄(`13:17:47`, `13:18:50`)은 5단계 때 직접 실행한 기록이다. 그 뒤에 `13:32:02`와 `13:33:02` 줄이 정확히 1분 간격으로 추가됐다. 초가 `:02`로 같은 것은 cron이 매분 0초에 시작하고, `monitor.sh`가 CPU 측정에 1초 쉰 뒤 기록하기 때문이다.
+`date`는 `13:33:34`이고, 로그 4줄 중 앞 두 줄(`13:17:47`, `13:18:50`)은 §5에서 직접 실행한 기록이다. 그 뒤에 `13:32:02`와 `13:33:02` 줄이 정확히 1분 간격으로 추가됐다. 초가 `:02`로 같은 것은 cron이 매분 0초에 시작하고, `monitor.sh`가 CPU 측정에 1초 쉰 뒤 기록하기 때문이다.
 
 ```
 [2026-10-23 13:32:02] PID:53111 CPU:17.4% MEM:70.1% DISK_USED:37%
